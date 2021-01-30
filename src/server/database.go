@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"reflect"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql" // mysql driver
@@ -76,123 +77,101 @@ func (db *database) subscribe(chat rowChat, channel rowChannel) error {
 }
 
 func (db *database) getSubscribeChatsByChannelID(channelID string) ([]rowChat, error) {
-	rows, err := db.Query(
+	var results []rowChat
+
+	if err := db.QueryResults(
+		&results,
+		func(rows *sql.Rows, dest interface{}) error {
+			chat := dest.(*rowChat)
+			return rows.Scan(&chat.id, &chat.admin)
+		},
 		"SELECT chats.id, chats.admin FROM "+
 			"chats INNER JOIN subscribers ON chats.id = subscribers.chatID "+
 			"WHERE subscribers.channelID = ?;",
 		channelID,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, err
-	}
-
-	defer rows.Close()
-
-	var results []rowChat
-	var chat rowChat
-	for rows.Next() {
-		err := rows.Scan(&chat.id, &chat.admin)
-		if err != nil {
-			return nil, err
-		}
-
-		results = append(results, chat)
-	}
-
-	if rows.Err() != nil {
-		return nil, rows.Err()
 	}
 
 	return results, nil
 }
 
 func (db *database) getSubscribedChannels() ([]rowChannel, error) {
-	var rows *sql.Rows
-	var err error
-
-	rows, err = db.Query("SELECT * FROM channels;")
-	if err != nil {
-		return nil, err
-	}
-
-	defer rows.Close()
-
 	var results []rowChannel
-	var channel rowChannel
-	for rows.Next() {
-		err := rows.Scan(&channel.id, &channel.title)
-		if err != nil {
-			return nil, err
-		}
 
-		results = append(results, channel)
-	}
-
-	if rows.Err() != nil {
-		return nil, rows.Err()
+	if err := db.QueryResults(
+		&results,
+		func(rows *sql.Rows, dest interface{}) error {
+			r := dest.(*rowChannel)
+			return rows.Scan(&r.id, &r.title)
+		},
+		"SELECT id, title FROM channels;",
+	); err != nil {
+		return nil, err
 	}
 
 	return results, nil
 }
 
 func (db *database) getSubscribedChannelsByChatID(chatID int64) ([]rowChannel, error) {
-	rows, err := db.Query(
+	var results []rowChannel
+
+	if err := db.QueryResults(
+		&results,
+		func(rows *sql.Rows, dest interface{}) error {
+			ch := dest.(*rowChannel)
+			return rows.Scan(&ch.id, &ch.title)
+		},
 		"SELECT channels.id, channels.title FROM "+
 			"channels INNER JOIN subscribers ON channels.id = subscribers.channelID "+
 			"WHERE subscribers.chatID = ?;",
 		chatID,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, err
-	}
-
-	defer rows.Close()
-
-	var results []rowChannel
-	var channel rowChannel
-
-	for rows.Next() {
-		err := rows.Scan(&channel.id, &channel.title)
-		if err != nil {
-			return nil, err
-		}
-
-		results = append(results, channel)
-	}
-
-	if rows.Err() != nil {
-		return nil, rows.Err()
 	}
 
 	return results, nil
 }
 
 func (db *database) getMonitoringMessagesByVideoID(videoID string) ([]rowMonitoring, error) {
-	rows, err := db.Query(
+	var results []rowMonitoring
+
+	if err := db.QueryResults(
+		&results,
+		func(rows *sql.Rows, dest interface{}) error {
+			r := dest.(*rowMonitoring)
+			return rows.Scan(&r.videoID, &r.chatID, &r.messageID)
+		},
 		"SELECT videoID, chatID, messageID FROM monitoring WHERE videoID = ?;",
 		videoID,
-	)
-
-	if err != nil {
+	); err != nil {
 		return nil, err
+	}
+
+	return results, nil
+}
+
+func (db *database) QueryResults(container interface{}, scan func(rows *sql.Rows, dest interface{}) error, query string, args ...interface{}) error {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return err
 	}
 
 	defer rows.Close()
 
-	var results []rowMonitoring
-	var monitoring rowMonitoring
+	results := reflect.ValueOf(container).Elem()
+	element := reflect.New(results.Type().Elem())
 	for rows.Next() {
-		err := rows.Scan(&monitoring.videoID, &monitoring.chatID, &monitoring.messageID)
-		if err != nil {
-			return nil, err
+		if err := scan(rows, element.Interface()); err != nil {
+			return err
 		}
 
-		results = append(results, monitoring)
+		results.Set(reflect.Append(results, element.Elem()))
 	}
 
 	if rows.Err() != nil {
-		return nil, rows.Err()
+		return rows.Err()
 	}
 
-	return results, nil
+	return nil
 }

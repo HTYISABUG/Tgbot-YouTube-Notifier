@@ -173,36 +173,29 @@ func (s *Server) unsubscribeHandler(update tgbot.Update) {
 
 			// Check not subscribed channels & unsubscribe them from hub
 			go func() {
-				rows, err := s.db.Query(
-					"SELECT channels.id FROM " +
-						"channels LEFT JOIN subscribers ON channels.id = subscribers.channelID " +
+				var results []string
+
+				if err := s.db.QueryResults(
+					&results,
+					func(rows *sql.Rows, dest interface{}) error {
+						r := dest.(*string)
+						return rows.Scan(r)
+					},
+					"SELECT channels.id FROM "+
+						"channels LEFT JOIN subscribers ON channels.id = subscribers.channelID "+
 						"WHERE subscribers.chatID IS NULL;",
-				)
-				if err != nil {
+				); err != nil {
 					log.Println(err)
 					return
 				}
 
-				defer rows.Close()
-
-				var cid string
-				for rows.Next() {
-					if err := rows.Scan(&cid); err != nil {
+				for _, id := range results {
+					if _, err := s.db.Exec("DELETE FROM channels WHERE id = ?;", id); err != nil {
 						log.Println(err)
 						continue
 					}
 
-					if _, err := s.db.Exec("DELETE FROM channels WHERE id = ?;", cid); err != nil {
-						log.Println(err)
-						continue
-					}
-
-					s.hub.Unsubscribe(cid)
-				}
-
-				if rows.Err() != nil {
-					log.Println(rows.Err())
-					return
+					s.hub.Unsubscribe(id)
 				}
 			}()
 
@@ -523,42 +516,27 @@ func (s *Server) remindHandler(update tgbot.Update) {
 func (s *Server) scheduleHandler(update tgbot.Update) {
 	chatID := update.Message.Chat.ID
 
-	rows, err := s.db.Query(
+	var results []struct {
+		video   rowVideo
+		chTitle string
+	}
+
+	if err := s.db.QueryResults(
+		&results,
+		func(rows *sql.Rows, dest interface{}) error {
+			res := dest.(*struct {
+				video   rowVideo
+				chTitle string
+			})
+			return rows.Scan(&res.video.id, &res.video.title, &res.video.startTime, &res.chTitle)
+		},
 		"SELECT videos.id, videos.title, videos.startTime, channels.title "+
 			"FROM monitoring INNER JOIN videos ON monitoring.videoID = videos.id "+
 			"INNER JOIN channels ON channels.id = videos.channelID "+
 			"WHERE monitoring.chatID = ?;",
 		chatID,
-	)
-
-	if err != nil {
+	); err != nil {
 		log.Println(err)
-		return
-	}
-
-	defer rows.Close()
-
-	var results []struct {
-		video   rowVideo
-		chTitle string
-	}
-	var video rowVideo
-	var chTitle string
-	for rows.Next() {
-		err := rows.Scan(&video.id, &video.title, &video.startTime, &chTitle)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-
-		results = append(results, struct {
-			video   rowVideo
-			chTitle string
-		}{video, chTitle})
-	}
-
-	if rows.Err() != nil {
-		log.Println(rows.Err())
 		return
 	}
 
@@ -594,7 +572,7 @@ func (s *Server) scheduleHandler(update tgbot.Update) {
 	msgConfig.DisableNotification = true
 	msgConfig.DisableWebPagePreview = true
 
-	_, err = s.tg.Send(msgConfig)
+	_, err := s.tg.Send(msgConfig)
 	if err != nil {
 		log.Println(err)
 		fmt.Println(msgConfig.Text)

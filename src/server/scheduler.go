@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"tgbot"
@@ -39,34 +40,22 @@ func (s *Server) regularScheduler() {
 
 func (s *Server) updateNotifies() {
 	// Get all monitored video ids.
-	rows, err := s.db.Query("SELECT DISTINCT videoID FROM monitoring;")
-	if err != nil {
+	var results []string
+
+	if err := s.db.QueryResults(
+		&results,
+		func(rows *sql.Rows, dest interface{}) error {
+			r := dest.(*string)
+			return rows.Scan(r)
+		},
+		"SELECT DISTINCT videoID FROM monitoring;",
+	); err != nil {
 		log.Println(err)
 		return
 	}
 
-	defer rows.Close()
-
-	var videoIDs []string
-	var videoID string
-
-	for rows.Next() {
-		err := rows.Scan(&videoID)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		videoIDs = append(videoIDs, videoID)
-	}
-
-	if rows.Err() != nil {
-		log.Println(rows.Err())
-		return
-	}
-
 	// Request video resources from yt api
-	resources, err := s.yt.GetVideoResources(videoIDs, []string{"snippet", "liveStreamingDetails"})
+	resources, err := s.yt.GetVideoResources(results, []string{"snippet", "liveStreamingDetails"})
 	if err != nil {
 		log.Println(err)
 		return
